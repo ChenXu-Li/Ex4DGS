@@ -31,6 +31,14 @@ from arguments import ModelParams, PipelineParams, OptimizationParams, get_combi
 from scene.c_gaussian_model import CGaussianModel as GaussianModel
 from utils.loss_utils import ssim
 
+# Subfolders under renders/: gaussian_renderer.render(..., mode=m)
+#   combined — static + dynamic (mode 0); static — static only (mode 1); dynamic — dynamic only (mode 2)
+RENDER_SPLIT_SUBDIRS = (
+    ("combined", 0),
+    ("static", 1),
+    ("dynamic", 2),
+)
+
 
 def render_set(model_path, name, iteration, scene, gaussians, pipeline, background, inverval=1, near=0.2, far=100.0, save_img=False):
     gts_path = os.path.join(model_path, name, "itrs_{}".format(iteration), "gt")
@@ -39,6 +47,8 @@ def render_set(model_path, name, iteration, scene, gaussians, pipeline, backgrou
     if save_img:
         makedirs(gts_path, exist_ok=True)
         makedirs(render_path, exist_ok=True)
+        for subdir_name, _ in RENDER_SPLIT_SUBDIRS:
+            makedirs(os.path.join(render_path, subdir_name), exist_ok=True)
     
     if name == "train":
         viewpoint_stack, images = scene.getTrainCameras(return_as='generator', shuffle=False)
@@ -66,13 +76,18 @@ def render_set(model_path, name, iteration, scene, gaussians, pipeline, backgrou
         gt = next(images).cuda()
 
         if idx % inverval == 0:
-            rendering_dict = render(cam, gaussians, pipeline, background, near=near, far=far)
+            rendering_dict = render(cam, gaussians, pipeline, background, near=near, far=far, mode=0)
             rendering = rendering_dict["render"]
             
             img_name = cam.image_name
             
             if save_img:
-                torchvision.utils.save_image(rendering, os.path.join(render_path, img_name))
+                for subdir_name, mode in RENDER_SPLIT_SUBDIRS:
+                    if mode == 0:
+                        out = rendering
+                    else:
+                        out = render(cam, gaussians, pipeline, background, near=near, far=far, mode=mode)["render"]
+                    torchvision.utils.save_image(out, os.path.join(render_path, subdir_name, img_name))
             psnrs.append(psnr(rendering.unsqueeze(0), gt.unsqueeze(0)))
             ssims.append(ssim(rendering.unsqueeze(0), gt.unsqueeze(0))) 
             skssims.append(sk_ssim(rendering.detach().cpu().numpy(), gt.detach().cpu().numpy(), data_range=1, multichannel=True, channel_axis=0)) 
@@ -91,7 +106,7 @@ def render_set(model_path, name, iteration, scene, gaussians, pipeline, backgrou
     for _ in range(20):
         for idx in range(500):
             st = time.time()
-            rendering_dict = render(cam, gaussians, pipeline, background, near=near, far=far)
+            rendering_dict = render(cam, gaussians, pipeline, background, near=near, far=far, mode=0)
             if idx > 100: #warm up
                 times.append(time.time() - st)
         
